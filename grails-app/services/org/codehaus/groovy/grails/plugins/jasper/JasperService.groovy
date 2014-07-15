@@ -17,20 +17,22 @@
  package org.codehaus.groovy.grails.plugins.jasper
 
  import groovy.sql.Sql
+import net.sf.jasperreports.engine.DefaultJasperReportsContext
+import net.sf.jasperreports.engine.JRPropertiesUtil
+import net.sf.jasperreports.engine.design.JRCompiler
+import net.sf.jasperreports.export.Exporter
+import net.sf.jasperreports.export.SimpleExporterInput
+import net.sf.jasperreports.export.SimpleOutputStreamExporterOutput
+import net.sf.jasperreports.export.SimpleTextReportConfiguration
+import net.sf.jasperreports.export.SimpleXlsReportConfiguration
+import net.sf.jasperreports.export.SimpleXlsxReportConfiguration
 
-import java.lang.reflect.Field
 import java.sql.Connection
 
-import net.sf.jasperreports.engine.JRExporter
-import net.sf.jasperreports.engine.JRExporterParameter
 import net.sf.jasperreports.engine.JasperCompileManager
 import net.sf.jasperreports.engine.JasperFillManager
 import net.sf.jasperreports.engine.JasperPrint
 import net.sf.jasperreports.engine.data.JRBeanCollectionDataSource
-import net.sf.jasperreports.engine.export.JRHtmlExporterParameter
-import net.sf.jasperreports.engine.export.JRTextExporterParameter
-import net.sf.jasperreports.engine.export.JRXlsExporterParameter
-import net.sf.jasperreports.engine.util.JRProperties
 
 import org.springframework.core.io.Resource
 import org.springframework.transaction.annotation.Transactional
@@ -108,17 +110,14 @@ class JasperService {
      */
     ByteArrayOutputStream generateReport(JasperReportDef reportDef) {
         ByteArrayOutputStream byteArray = new ByteArrayOutputStream()
-        JRExporter exporter = generateExporter(reportDef)
-
-        exporter.setParameter(JRExporterParameter.OUTPUT_STREAM, byteArray)
-        exporter.setParameter(JRExporterParameter.CHARACTER_ENCODING, "UTF-8")
+        Exporter exporter = generateExporter(reportDef)
+        exporter.setExporterOutput(new SimpleOutputStreamExporterOutput(byteArray))
 
         def jasperPrint = reportDef.jasperPrinter
         if (jasperPrint==null) {
             reportDef.jasperPrinter = generatePrinter(reportDef)
         }
-
-        exporter.setParameter(JRExporterParameter.JASPER_PRINT, reportDef.jasperPrinter)
+        exporter.setExporterInput(new SimpleExporterInput(reportDef.jasperPrinter))
         exporter.exportReport()
 
         return byteArray
@@ -133,13 +132,11 @@ class JasperService {
      */
     ByteArrayOutputStream generateReport(List<JasperReportDef> reports) {
         ByteArrayOutputStream byteArray = new ByteArrayOutputStream()
-        JRExporter exporter = generateExporter(reports.first())
+        Exporter exporter = generateExporter(reports.first())
+        exporter.setExporterOutput(new SimpleOutputStreamExporterOutput(byteArray))
 
-        exporter.setParameter(JRExporterParameter.OUTPUT_STREAM, byteArray)
-        exporter.setParameter(JRExporterParameter.CHARACTER_ENCODING, "UTF-8")
-
-        def printers = reports.collect { report -> generatePrinter(report) }
-        exporter.setParameter(JRExporterParameter.JASPER_PRINT_LIST, printers)
+        List<JasperPrint> printers = reports.collect { report -> generatePrinter(report) }
+        exporter.setExporterInput( SimpleExporterInput.getInstance(printers))
 
         exporter.exportReport()
 
@@ -162,12 +159,12 @@ class JasperService {
 
             // This is the current official means for setting the temp folder for jasper reports to use when compiling
             // reports on the fly, but it doesn't work
-            JRProperties.setProperty(JRProperties.COMPILER_TEMP_DIR, tempFolder.getAbsolutePath())
+            JRPropertiesUtil.getInstance(DefaultJasperReportsContext.getInstance()).setProperty(JRCompiler.COMPILER_TEMP_DIR, tempFolder.getAbsolutePath())
 
             // This is a deprecated means for setting the temp folder that supposedly still works (still in the Jasper
             // Reports source code trunk as of 14-Aug-2008, and, in fact, takes precedence over the official method);
             // however, it doesn't work either.
-            System.setProperty("jasper.reports.compile.temp", tempFolder.getAbsolutePath())
+            System.setProperty("net.sf.jasperreports.compile.temp.dir", tempFolder.getAbsolutePath())
 
             if (!tempFolder.exists()) {
                 def ant = new AntBuilder()
@@ -185,7 +182,7 @@ class JasperService {
      * @param reportDef
      * @return JRExporter
      */
-    private JRExporter generateExporter(JasperReportDef reportDef) {
+    private Exporter generateExporter(JasperReportDef reportDef) {
         if (reportDef.parameters.SUBREPORT_DIR == null) {
             reportDef.parameters.SUBREPORT_DIR = reportDef.getFilePath()
         }
@@ -202,17 +199,19 @@ class JasperService {
             reportDef.parameters.REPORT_LOCALE = Locale.getDefault()
         }
 
-        JRExporter exporter = JasperExportFormat.getExporter(reportDef.fileFormat)
-        Field[] fields = JasperExportFormat.getExporterFields(reportDef.fileFormat)
+        Exporter exporter = JasperExportFormat.getExporter(reportDef.fileFormat)
 
         Boolean useDefaultParameters = reportDef.parameters.useDefaultParameters.equals("true")
         if (useDefaultParameters) {
             applyDefaultParameters(exporter, reportDef.fileFormat)
         }
 
-        if (fields) {
-            applyCustomParameters(fields, exporter, reportDef.parameters)
-        }
+        //TODO: find way to customize
+//        Field[] fields = JasperExportFormat.getExporterFields(reportDef.fileFormat)
+//        if (fields) {
+//            applyCustomParameters(fields, exporter, reportDef.parameters)
+//        }
+
 
         return exporter
     }
@@ -260,44 +259,41 @@ class JasperService {
         return jasperPrint
     }
 
-    /**
-     * Apply additional parameters to the exporter. If the user submits a parameter that is not available for
-     * the file format this parameter is ignored.
-     * @param fields , available fields for the choosen file format
-     * @param exporter , the exporter object
-     * @param parameter , the parameters to apply
-     */
-    private void applyCustomParameters(Field[] fields, JRExporter exporter, Map<String, Object> parameters) {
-        def fieldNames = fields.collect {it.getName()}
-
-        parameters.each { p ->
-            if (fieldNames.contains(p.getKey())) {
-                def fld = Class.forName(fields.find {it.name = p.getKey()}.clazz.name).getField(p.getKey())
-                exporter.setParameter(fld.get(fld.root.class), p.getValue())
-            }
-        }
-    }
+//    /**
+//     * Apply additional parameters to the exporter. If the user submits a parameter that is not available for
+//     * the file format this parameter is ignored.
+//     * @param fields , available fields for the choosen file format
+//     * @param exporter , the exporter object
+//     * @param parameter , the parameters to apply
+//     */
+//    private void applyCustomParameters(Field[] fields, Exporter exporter, Map<String, Object> parameters) {
+//        def fieldNames = fields.collect {it.getName()}
+//
+//        parameters.each { p ->
+//            if (fieldNames.contains(p.getKey())) {
+//                def fld = Class.forName(fields.find {it.name = p.getKey()}.clazz.name).getField(p.getKey())
+//                exporter.setParameter(fld.get(fld.root.class), p.getValue())
+//            }
+//        }
+//    }
 
     /**
      * Apply the default parameters for a bunch of file format and only if useDefaultParameters is enabled.
      * @param exporter , the JRExporter
      * @param format , the target file format
      */
-    private void applyDefaultParameters(JRExporter exporter, JasperExportFormat format) {
+    private void applyDefaultParameters(Exporter exporter, JasperExportFormat format) {
         switch (format) {
-            case JasperExportFormat.HTML_FORMAT:
-            exporter.setParameter(JRHtmlExporterParameter.IS_USING_IMAGES_TO_ALIGN, false)
-            break
             case JasperExportFormat.XLS_FORMAT:
-            exporter.setParameter(JRXlsExporterParameter.IS_ONE_PAGE_PER_SHEET, true)
-            exporter.setParameter(JRXlsExporterParameter.IS_AUTO_DETECT_CELL_TYPE, true)
-            exporter.setParameter(JRXlsExporterParameter.IS_WHITE_PAGE_BACKGROUND, false)
-            exporter.setParameter(JRXlsExporterParameter.IS_REMOVE_EMPTY_SPACE_BETWEEN_ROWS, true)
-            break
+                exporter.setConfiguration(new SimpleXlsReportConfiguration(isOnePagePerSheet: true,
+                        isWhitePageBackground: true, isRemoveEmptySpaceBetweenRows: true, isDetectCellType: false))
+                break
+            case JasperExportFormat.XLSX_FORMAT:
+                exporter.setConfiguration(new SimpleXlsxReportConfiguration(isOnePagePerSheet: true,
+                        isWhitePageBackground: true, isRemoveEmptySpaceBetweenRows: true, isDetectCellType: false))
+                break
             case JasperExportFormat.TEXT_FORMAT:
-            exporter.setParameter(JRTextExporterParameter.PAGE_WIDTH, 80)
-            exporter.setParameter(JRTextExporterParameter.PAGE_HEIGHT, 60)
-            exporter.setParameter(JRTextExporterParameter.PAGE_HEIGHT, 60)
+                exporter.setConfiguration(new SimpleTextReportConfiguration(pageWidthInChars: 80, pageHeightInChars: 60))
             break
         }
     }
