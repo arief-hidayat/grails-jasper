@@ -1,4 +1,4 @@
-if (typeof jQuery !== 'undefined') {
+if (typeof jQuery !== 'undefined') { // grails jasper
 	(function($) {
 		$('#spinner').ajaxStart(function() {
 			$(this).fadeIn();

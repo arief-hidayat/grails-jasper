@@ -9,7 +9,8 @@ class JasperGrailsPlugin {
 
     List pluginExcludes = [
             'docs/**',
-            'src/docs/**'
+            'src/docs/**',
+            "web-app/js"
     ]
 
     def title = "Jasper Plugin"
