@@ -18,6 +18,7 @@
 
  import groovy.sql.Sql
 import net.sf.jasperreports.engine.DefaultJasperReportsContext
+import net.sf.jasperreports.engine.JRDataSource
 import net.sf.jasperreports.engine.JRPropertiesUtil
 import net.sf.jasperreports.engine.design.JRCompiler
 import net.sf.jasperreports.export.Exporter
@@ -225,15 +226,17 @@ class JasperService {
     private JasperPrint generatePrinter(JasperReportDef reportDef) {
         JasperPrint jasperPrint
         Resource resource = reportDef.getReport()
-
-        if (reportDef.reportData != null && !reportDef.reportData.isEmpty()) {
-            JRBeanCollectionDataSource jrBeanCollectionDataSource = new JRBeanCollectionDataSource(reportDef.reportData)
+        JRDataSource jrDataSource = reportDef.dataSource
+        if (jrDataSource == null && reportDef.reportData != null && !reportDef.reportData.isEmpty()) {
+            jrDataSource = new JRBeanCollectionDataSource(reportDef.reportData)
+        }
+        if (jrDataSource != null) {
             if (resource.getFilename().endsWith('.jasper')) {
-                jasperPrint = JasperFillManager.fillReport(resource.inputStream, reportDef.parameters, jrBeanCollectionDataSource)
+                jasperPrint = JasperFillManager.fillReport(resource.inputStream, reportDef.parameters, jrDataSource)
             }
             else {
                 forceTempFolder()
-                jasperPrint = JasperFillManager.fillReport(JasperCompileManager.compileReport(resource.inputStream), reportDef.parameters, jrBeanCollectionDataSource)
+                jasperPrint = JasperFillManager.fillReport(JasperCompileManager.compileReport(resource.inputStream), reportDef.parameters, jrDataSource)
             }
         }
         else {
